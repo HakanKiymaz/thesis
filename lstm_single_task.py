@@ -13,7 +13,7 @@ from transformers import BertTokenizer
 from lstm_parameters import Args, args
 from helpers import create_kidney_label, preprocess
 
-arguments = Args(args)
+arguments = Args(args, type="kidney")
 
 
 class SingleTaskLSTM(nn.Module):
@@ -42,7 +42,8 @@ class SingleTaskLSTM(nn.Module):
         h0 = self.init_hidden(current_batch_size)
         c0 = self.init_cell(current_batch_size)
         lstm_out, (hidden, cell) = self.lstm(embed, (h0, c0))
-        output = self.drop(hidden)
+        # hidden = torch.permute(hidden, (1, 0, 2))
+        output = self.drop(lstm_out)
         output = self.activation(output)
         output = self.fc1(output)
         output = torch.squeeze(output)
@@ -88,10 +89,10 @@ if __name__ == "__main__":
     result_path = "results/"
     day_string = date.today().strftime("%Y_%m_%d")
     checkpoint_path = result_path + day_string + "_checkpoints"
-    if os.path.isdir(checkpoint_path):
-        raise Exception("Model Path Already Exist")
-
-    os.mkdir(checkpoint_path)
+    # if os.path.isdir(checkpoint_path):
+    #     raise Exception("Model Path Already Exist")
+    #
+    # os.mkdir(checkpoint_path)
 
     tabular_data = pd.read_excel(arguments.data_path,
                                  usecols=["Pateint_ID_text", "TEXT", "Anatomical_Position_type"])
@@ -112,8 +113,8 @@ if __name__ == "__main__":
     eval_data.drop("Pateint_ID_text", axis=1, inplace=True)
     train_dataset = PathologyDataset(train_data, max_len=arguments.max_seq_len, tokenize=model.tokenizer)
     eval_dataset = PathologyDataset(eval_data, max_len=arguments.max_seq_len, tokenize=model.tokenizer)
-    train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
-    eval_dataloader = DataLoader(eval_dataset, batch_size=2, shuffle=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+    eval_dataloader = DataLoader(eval_dataset, batch_size=4, shuffle=True)
 
     criterion = nn.BCEWithLogitsLoss()
     optimizer = AdamW(model.parameters(), lr=arguments.learning_rate, weight_decay=arguments.weight_decay)

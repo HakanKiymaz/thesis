@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import shutil
 
 from pdf_parse import read_pdf, clean_report
 
@@ -17,13 +18,7 @@ def get_punctuations():
     return punctuations
 
 
-def create_kidney_label(text):
-    if "left" in text.lower():
-        return "left"
-    elif "right" in text.lower():
-        return "right"
-    else:
-        return "None"
+
 
 
 def preprocess(text):
@@ -40,12 +35,22 @@ def extract_report_ids(directory: str = "./breast-reports-TCGA/gdc_data/gdc_data
         fpath = directory + "/" + folder
         if os.path.isdir(fpath):
             report_file = [file for file in os.listdir(fpath) if file.endswith(".pdf")][0]
+            bardoce_id = report_file.split(".")[0]
             report = read_pdf(fpath + "/" + report_file)
-            report = clean_report(report)
-            files["barcode"].append(report_file.split(".")[0])
-            files["text"].append(report)
+
+            saving_path = os.getcwd() + "/Breast_Reports_Preparation" + "/" + bardoce_id
+            if not os.path.exists(saving_path):
+                os.mkdir(saving_path)
+                with open(saving_path + "/pathology_report_original.txt", "w") as f:
+                    f.write(report)
+
+                shutil.copy(fpath + "/" + report_file, saving_path)
+
+                report = clean_report(report)
+                files["barcode"].append(bardoce_id)
+                files["text"].append(report)
     reports = pd.DataFrame(files)
-    reports.to_excel("Existing_breast_reports.xlsx", index=False)
+    reports.to_excel("./Breast_Reports_Preparation/Existing_breast_reports.xlsx", index=False)
     return reports
 
 
@@ -73,6 +78,7 @@ def get_existing_reports():
 
 
 if __name__ == "__main__":
+    reports = extract_report_ids()
     in_model_files = get_existing_reports()
 
     print("done")
