@@ -30,5 +30,4 @@ if __name__ == "__main__":
 
     cleaned_report = clean_report(report)
 
-
     print("done")

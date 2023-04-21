@@ -13,8 +13,7 @@ from datetime import date
 from lstm_parameters import Args, args
 from helpers import create_kidney_label, preprocess, get_existing_reports, COLUMNS
 
-
-arguments = Args(args)
+arguments = Args(args, type="kidney")
 
 
 class MultiTaskLSTM(nn.Module):
@@ -25,8 +24,13 @@ class MultiTaskLSTM(nn.Module):
             task_num_classes = [3, 4, 5]
 
         self.D = 2 if arg_class.bidirectional else 1
-        self.tokenizer = BertTokenizer.from_pretrained(arg_class.bert_model_path,
-                                                       max_length=arg_class.tokenizer_max_len, padding="max_length")
+        self.tokenizer = BertTokenizer.from_pretrained(
+            "/home/hkiymaz/.cache/huggingface/transformers/45c3f7a79a80e1cf0a489e5c62b43f173c15db47864303a55d623bb3c96f72a5.d789d64ebfe299b0e416afc4a169632f903f693095b4629a7ea271d5a0cf2c99",
+            max_length=arg_class.tokenizer_max_len, padding="max_length",
+            local_files_only=True)
+        # self.tokenizer = BertTokenizer.from_pretrained(arg_class.bert_model_path,
+        #                                                max_length=arg_class.tokenizer_max_len, padding="max_length",
+        #                                                cache_dir="PATH/TO/MY/CACHE/DIR")
         emb_size = len(self.tokenizer.vocab)
         self.emb_dim = arg_class.emb_dim
 
@@ -50,6 +54,9 @@ class MultiTaskLSTM(nn.Module):
         h0 = self.init_hidden(current_batch_size)
         c0 = self.init_cell(current_batch_size)
         lstm_out, (hidden, cell) = self.lstm(embed, (h0, c0))
+        """
+        the output of hidden cell is D*num_layers,N,Hidden_out.
+        """
         output = self.drop(hidden)
         output = self.activation(output)
         task_outputs = [layer(output) for layer in self.output_layers]
@@ -183,12 +190,29 @@ if __name__ == "__main__":
 
     model.train()
     for features, labels in train_dataloader:
+        """
+        {0: 'histological_type', 8 classes
+         1: 'tumor_status', 3 classes
+         2: 'ajcc_pathologic_tumor_stage', 14 classes
+         3: 'new_tumor_event_type', 5 classes
+         }
+         """
         optimizer.zero_grad()
 
         out = model(features)
-
-        loss = criterion(out, labels.squeeze())
+        """
+        out[i].shape = D x Batch x Class
+        """
+        loss = torch.Tensor([0])
+        print("output fc1 weights sum before backward")
+        print(model.output_layers[0].weight.sum())
+        for i in range(len(out)):
+            individual_class_out = torch.sum(out[i], dim=0)
+            loss += criterion(individual_class_out, labels[i])
 
         loss.backward()
         optimizer.step()
-        print("Done")
+
+        print("output fc1 weights sum after step")
+        print(model.output_layers[0].weight.sum())
+        break
