@@ -37,7 +37,7 @@ class MultiTaskKidneyLSTM(nn.Module):
         self.lstm = nn.LSTM(input_size=arg_class.emb_dim, hidden_size=arg_class.hid_dim,
                             bidirectional=arg_class.bidirectional, batch_first=True)
 
-        self.drop = nn.Dropout(0.3)
+        self.drop = nn.Dropout(0.2)
         self.activation = nn.ReLU()
         self.hidden_dim = arg_class.hid_dim
         self.cell_dim = arg_class.hid_dim
@@ -46,15 +46,16 @@ class MultiTaskKidneyLSTM(nn.Module):
         self.output_layers = nn.ModuleList(
             [nn.Linear(arg_class.hid_dim, task_num_classes[i]) for i in range(task_count)])
 
-    def forward(self, x):
-        current_batch_size = len(x)
-        embed = self.embed(x)
+    def forward(self, inputs, mask):
+        current_batch_size = len(inputs)
+        embed = self.embed(inputs)
         h0 = self.init_hidden(current_batch_size)
         c0 = self.init_cell(current_batch_size)
         lstm_out, (hidden, cell) = self.lstm(embed, (h0, c0))
 
         output = self.drop(hidden)
         output = self.activation(output)
+        output = torch.sum(output, dim=0)
         task_outputs = [layer(output) for layer in self.output_layers]
         return task_outputs
 
@@ -66,7 +67,7 @@ class MultiTaskKidneyLSTM(nn.Module):
 
 
 class KidneyMultiTaskDataset(Dataset):
-    def __init__(self, dataframe, max_len, tokenize=None):
+    def __init__(self, dataframe, task_labels, max_len, tokenize=None):
         super(KidneyMultiTaskDataset, self).__init__()
         self.data = dataframe
         self.max_len = max_len
@@ -76,15 +77,15 @@ class KidneyMultiTaskDataset(Dataset):
         self.input_ids = self.texts["input_ids"]
         self.token_type_ids = self.texts["token_type_ids"]
         self.attention_mask = self.texts["attention_mask"]
-        self.labels = self.data.anatomical_side.values.tolist()
-        self.label_map = {"right": torch.Tensor([1, 0]),
-                          "left": torch.Tensor([0, 1])}
-        print("label_map", self.label_map)
+        self.labels = task_labels
 
     def __getitem__(self, idx):
         batch_text = [text for text in self.input_ids][idx]
-        batch_label = [self.label_map[lbl] for lbl in self.labels][idx]
-        return batch_text, batch_label
+        batch_mask = [text for text in self.attention_mask][idx]
+        batch_label = []
+        for key in self.labels.keys():
+            batch_label.append(self.labels[key][idx])
+        return batch_text, batch_label, batch_mask
 
     def __len__(self):
         return len(self.data)
@@ -130,19 +131,22 @@ class TaskCreator:
     def class_to_index(self):
         self.c2i = {}
         self.i2c = {}
-        for lbl_ in self.targets:
-            uniqs = list(self.data[lbl_].unique())
+        for target in self.targets:
+            uniqs = list(self.data[target].unique())
+            if None in uniqs:
+                uniqs.remove(None)
             uniqs.sort(reverse=True)
-            if uniqs[0] != "None" and "None" in uniqs:
+            if "None" in uniqs:
+                print(target)
                 uniqs.remove("None")
-                uniqs.insert(0, "None")
-            # elif "None" not in uniqs:
-            # uniqs.insert(0, "None")
-            self.c2i[lbl_] = {}
-            self.i2c[lbl_] = {}
+                uniqs.insert(0, None)
+            if None not in uniqs:
+                uniqs.insert(0, None)
+            self.c2i[target] = {}
+            self.i2c[target] = {}
             for ix, uniq in enumerate(uniqs):
-                self.c2i[lbl_][uniq] = ix
-                self.i2c[lbl_][ix] = uniq
+                self.c2i[target][uniq] = ix
+                self.i2c[target][ix] = uniq
 
             self.task_num_classes.append(len(uniqs))
 
@@ -158,7 +162,7 @@ class KidneyDataClean:
         if len(row) > 1:
             return "AJ1"
         elif None in row:
-            return "None"
+            return None
         else:
             return "AJ0"
 
@@ -169,7 +173,7 @@ class KidneyDataClean:
         if len(row) > 1:
             return "multi_type"
         elif None in row:
-            return "None"
+            return None
         elif len(row) == 1:
             if "other" in row:
                 return "other"
@@ -178,7 +182,20 @@ class KidneyDataClean:
             elif "Papillary_Renal_Cell_Carcinoma" in row:
                 return "papillary_renal_cell_carcinoma"
             else:
-                return "None"
+                return None
+
+    @staticmethod
+    def adjust_fuhrman(row):
+        row = eval(row)
+        row = list(set(row))
+        if len(row) > 1:
+            """
+            if multi grade, choose max
+            """
+            row.sort()
+            return row[-1]
+        else:
+            return row[0]
 
     @staticmethod
     def create_kidney_label(text):
@@ -201,39 +218,44 @@ if __name__ == "__main__":
     model_data["anatomical_side"] = model_data["Anatomical_Position_type"].apply(kdc.create_kidney_label)
     model_data["ajcc_classification"] = model_data["AJCC_Classification_id"].apply(kdc.adjust_ajcc)
     model_data["histologic_classification"] = model_data["Histologic_Type_type"].apply(kdc.adjust_histologic_type)
+    model_data["fuhrman_type"] = model_data["Fuhrman_Nuclear_Grade_type"].apply(kdc.adjust_fuhrman)
 
     model_data = model_data[model_data["anatomical_side"] != "None"]
     model_data["text"] = model_data["TEXT"].apply(preprocess)
 
-    model_data.drop(["Anatomical_Position_type", "TEXT"], axis=1, inplace=True)
+    model_data.drop(arguments.MT_target_cols + ["TEXT"], axis=1, inplace=True)
     train_data, eval_data = train_test_split(model_data, test_size=0.2, random_state=42)
 
     # train_data.to_excel(arguments.train_data_path, index=False)
     # eval_data.to_excel(arguments.eval_data_path, index=False)
-    task = TaskCreator(model_data, targets)
+    task = TaskCreator(model_data, arguments.MT_renamed_target_cols)
     model = MultiTaskKidneyLSTM(arguments,
                                 task.task_count, task.task_num_classes)
 
     train_data.drop("Pateint_ID_text", axis=1, inplace=True)
     eval_data.drop("Pateint_ID_text", axis=1, inplace=True)
-    train_dataset = KidneyMultiTaskDataset(train_data, max_len=arguments.max_seq_len, tokenize=model.tokenizer)
-    eval_dataset = KidneyMultiTaskDataset(eval_data, max_len=arguments.max_seq_len, tokenize=model.tokenizer)
-    train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
-    eval_dataloader = DataLoader(eval_dataset, batch_size=4, shuffle=True)
+    train_dataset = KidneyMultiTaskDataset(train_data, task.labels, max_len=arguments.max_seq_len, tokenize=model.tokenizer)
+    eval_dataset = KidneyMultiTaskDataset(eval_data, task.labels, max_len=arguments.max_seq_len, tokenize=model.tokenizer)
+    train_dataloader = DataLoader(train_dataset, batch_size=arguments.train_batch_size, shuffle=True)
+    eval_dataloader = DataLoader(eval_dataset, batch_size=arguments.test_batch_size, shuffle=True)
 
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss()
     optimizer = AdamW(model.parameters(), lr=arguments.learning_rate, weight_decay=arguments.weight_decay)
     losses = {"train_loss": [], "eval_loss": []}
     for epoch in range(arguments.epochs):
         train_loss = []
         eval_loss = []
         model.train()
-        for features, labels in train_dataloader:
+        for features, labels, mask in train_dataloader:
             optimizer.zero_grad()
 
-            out = model(features)
-            out = model.softmax(out)
-            loss = criterion(out, labels.squeeze())
+            out = model(features, mask)
+            """
+            bidirectional x batch x class_labels
+            """
+            loss = torch.Tensor([0.0])
+            for cls_id in range(arguments.train_batch_size):
+                loss += criterion(out[cls_id], labels[cls_id])
 
             loss.backward()
             optimizer.step()
@@ -241,14 +263,10 @@ if __name__ == "__main__":
         losses["train_loss"].append(np.mean(train_loss))
         model.eval()
         with torch.no_grad():
-            for features, labels in eval_dataloader:
-                out = model(features)
-                loss = criterion(out, labels.squeeze())
+            for features, labels, mask_ in eval_dataloader:
+                out = model(features, mask_)
+                loss = torch.Tensor([0.0])
+                for cls_id in range(arguments.test_batch_size):
+                    loss += criterion(out[cls_id], labels[cls_id])
                 eval_loss.append(loss.item())
         losses["eval_loss"].append(np.mean(eval_loss))
-
-        # save_model(model, checkpoint_path + f"/{str(epoch)}/" + "cp_kidney_cancer_type_lstm.pt")
-        # with open(checkpoint_path + "/train_loss.txt", "w") as f:
-        #     f.write(str(np.mean(train_loss)) + "\n")
-        # with open(checkpoint_path + "/eval_loss.txt", "w") as f:
-        #     f.write(str(np.mean(eval_loss)) + "\n")
