@@ -98,6 +98,7 @@ if __name__ == "__main__":
                                  usecols=["Pateint_ID_text", "TEXT", "Anatomical_Position_type"])
 
     tabular_data["side"] = tabular_data["Anatomical_Position_type"].apply(create_kidney_label)
+    #filter if side == None
     tabular_data = tabular_data[tabular_data["side"] != "None"]
     tabular_data["text"] = tabular_data["TEXT"].apply(preprocess)
 

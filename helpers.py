@@ -18,9 +18,6 @@ def get_punctuations():
     return punctuations
 
 
-
-
-
 def preprocess(text):
     text = text.translate(str.maketrans("", "", get_punctuations()))
     return text
@@ -38,7 +35,7 @@ def extract_report_ids(directory: str = "./breast-reports-TCGA/gdc_data/gdc_data
             bardoce_id = report_file.split(".")[0]
             report = read_pdf(fpath + "/" + report_file)
 
-            saving_path = os.getcwd() + "/Breast_Reports_Preparation" + "/" + bardoce_id
+            saving_path = os.getcwd() + "/TCGA_Breast_Reports_Filed_Format" + "/" + bardoce_id
             if not os.path.exists(saving_path):
                 os.mkdir(saving_path)
                 with open(saving_path + "/pathology_report_original.txt", "w") as f:
@@ -50,7 +47,7 @@ def extract_report_ids(directory: str = "./breast-reports-TCGA/gdc_data/gdc_data
                 files["barcode"].append(bardoce_id)
                 files["text"].append(report)
     reports = pd.DataFrame(files)
-    reports.to_excel("./Breast_Reports_Preparation/Existing_breast_reports.xlsx", index=False)
+    reports.to_excel("./TCGA_Breast_Reports_Filed_Format/Existing_breast_reports.xlsx", index=False)
     return reports
 
 
@@ -75,6 +72,15 @@ def get_existing_reports():
     merged.reset_index(drop=True, inplace=True)
     merged.fillna("None", inplace=True)
     return merged
+
+
+def create_kidney_label(text):
+    if "left" in text.lower():
+        return "left"
+    elif "right" in text.lower():
+        return "right"
+    else:
+        return "None"
 
 
 if __name__ == "__main__":
