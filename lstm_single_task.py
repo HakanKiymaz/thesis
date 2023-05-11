@@ -28,7 +28,7 @@ class SingleTaskLSTM(nn.Module):
         self.embed = nn.Embedding(emb_size, arg_class.emb_dim)
         self.lstm = nn.LSTM(input_size=arg_class.emb_dim, hidden_size=arg_class.hid_dim,
                             bidirectional=arg_class.bidirectional, batch_first=True)
-        self.fc1 = nn.Linear(arg_class.hid_dim, num_classes)
+        self.fc1 = nn.Linear(arg_class.hid_dim*self.D, num_classes)
         self.drop = nn.Dropout(0.3)
         self.activation = nn.ReLU()
         self.hidden_dim = arg_class.hid_dim
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     for epoch in range(arguments.epochs):
         train_loss = []
         eval_loss = []
-        os.mkdir(checkpoint_path + f"/{str(epoch)}")
+        #os.mkdir(checkpoint_path + f"/{str(epoch)}")
         model.train()
         for features, labels in train_dataloader:
             optimizer.zero_grad()
