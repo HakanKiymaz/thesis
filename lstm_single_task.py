@@ -17,12 +17,11 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class SingleTaskLSTM(nn.Module):
-    def __init__(self, arg_class, num_classes):
+    def __init__(self, arg_class, num_classes, vocab_size):
         super(SingleTaskLSTM, self).__init__()
         self.D = 2 if arg_class.bidirectional else 1
-        self.tokenizer = BertTokenizer.from_pretrained(arg_class.bert_model_path,
-                                                       max_length=arg_class.tokenizer_max_len, padding="max_length")
-        emb_size = len(self.tokenizer.vocab)
+
+        emb_size = vocab_size
         self.emb_dim = arg_class.emb_dim
 
         self.embed = nn.Embedding(emb_size, arg_class.emb_dim)
@@ -40,36 +39,18 @@ class SingleTaskLSTM(nn.Module):
         current_batch_size = len(x)
         embed = self.embed(x)  # Get embedding features of input ids
 
-        # mask filter for PADs.
-        embed = embed.permute((2, 0, 1))
-        embed = embed * batch_mask
-        embed = embed.permute((1, 2, 0))
-
         h0 = self.init_hidden(current_batch_size)
         c0 = self.init_cell(current_batch_size)
         lstm_out, (hidden, cell) = self.lstm(embed, (
-        h0, c0))  # lstm takes input features matrix and (hidden,cell) state vectors
+            h0, c0))  # lstm takes input features matrix and (hidden,cell) state vectors
         # mask filtered embeddings are fed into lstm
-
-        # mask filter for PADs.
-        lstm_out = lstm_out.permute((2, 0, 1))  # permute for matrix multiplication.
-        lstm_out = lstm_out * batch_mask
-        lstm_out = lstm_out.permute((1, 2, 0))
 
         output = self.drop(lstm_out)
         output = self.activation(output)
+        output = self.last_token_vector(output, batch_mask)
         output = self.fc1(output)  # fully connected projection layer for class logits
 
-        # mask filter for PADs.
-        output = output.permute((2, 0, 1))
-        output = output * batch_mask
-        output = output.permute((1, 2, 0))
-
-        output = torch.squeeze(output)  # squeeze into 1 single score. (pooling)
-        if current_batch_size == 1:
-            output = output.view((1, output.shape[0], output.shape[1]))
-        # TODO: pooling strategy can be wrong. should work on
-        return torch.sum(output, dim=1)
+        return output
 
     def init_hidden(self, batch_size):
         return torch.zeros(self.D, batch_size, self.hidden_dim, requires_grad=False)
@@ -77,15 +58,21 @@ class SingleTaskLSTM(nn.Module):
     def init_cell(self, batch_size):
         return torch.zeros(self.D, batch_size, self.hidden_dim, requires_grad=False)
 
+    @staticmethod
+    def last_token_vector(output_, mask_):
+        last_tokens = mask_.sum(dim=1) - 1
+        return torch.stack([o[last_tokens[i]] for i, o in enumerate(output_)])
+
 
 class PathologyDataset(Dataset):
-    def __init__(self, dataframe, max_len, tokenize=None):
+    def __init__(self, dataframe, max_len, tokenizer):
         super(PathologyDataset, self).__init__()
+        self.tokenizer = tokenizer
         self.data = dataframe
         self.max_len = max_len
-        self.texts = tokenize(self.data.text.values.tolist(), max_length=max_len, padding="max_length",
-                              truncation=True,
-                              return_tensors="pt")
+        self.texts = self.tokenizer(self.data.text.values.tolist(), max_length=max_len, padding="max_length",
+                                    truncation=True,
+                                    return_tensors="pt")
         """
         We use Bert tokenizer from huggingface.
         Tokenizer gives 3 outputs which are pytorch tensors. 
@@ -93,7 +80,7 @@ class PathologyDataset(Dataset):
         """
         self.input_ids = self.texts["input_ids"]
         self.token_type_ids = self.texts["token_type_ids"]
-        self.attention_mask = self.texts["attention_mask"]
+        self.attention_mask = self.texts["attention_mask"]  # pad
 
         self.labels_ = self.data.side.values.tolist()
         self.label_map = {"right": torch.Tensor([1, 0]),
@@ -108,10 +95,10 @@ class PathologyDataset(Dataset):
 
     def __getitem__(self, idx):
         # this method will be called when we iterate dataset in the for loop.
-        batch_text = [text for text in self.input_ids][idx]
-        batch_label = [label for label in self.labels][idx]
-        batch_mask = [mask for mask in self.attention_mask][idx]
-        return batch_text, batch_label, batch_mask
+        text_ = self.input_ids[idx]
+        labels_ = self.labels[idx]
+        mask_ = self.attention_mask[idx]
+        return text_, labels_, mask_
 
     def __len__(self):
         return len(self.data)
@@ -143,19 +130,24 @@ if __name__ == "__main__":
 
     # train_data.to_excel(arguments.train_data_path, index=False)
     # eval_data.to_excel(arguments.eval_data_path, index=False)
-    model = SingleTaskLSTM(arguments,
-                           num_classes=2)
-    model.to(device)
-
     train_data.drop("Pateint_ID_text", axis=1, inplace=True)
     eval_data.drop("Pateint_ID_text", axis=1, inplace=True)
+    train_data.reset_index(drop=True, inplace=True)
+    eval_data.reset_index(drop=True, inplace=True)
 
-    train_dataset = PathologyDataset(train_data, max_len=arguments.max_seq_len, tokenize=model.tokenizer)
-    eval_dataset = PathologyDataset(eval_data, max_len=arguments.max_seq_len, tokenize=model.tokenizer)
+    tokenizer = BertTokenizer.from_pretrained(arguments.bert_model_path,
+                                              max_length=arguments.tokenizer_max_len, padding="max_length")
+
+    train_dataset = PathologyDataset(train_data, max_len=arguments.max_seq_len, tokenizer=tokenizer)
+    eval_dataset = PathologyDataset(eval_data, max_len=arguments.max_seq_len, tokenizer=tokenizer)
 
     train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
     eval_dataloader = DataLoader(eval_dataset, batch_size=4, shuffle=True)
 
+    model = SingleTaskLSTM(arguments,
+                           num_classes=2,
+                           vocab_size=len(tokenizer.vocab))
+    model.to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = AdamW(model.parameters(), lr=arguments.learning_rate, weight_decay=arguments.weight_decay)
     losses = {"train_loss": [], "eval_loss": []}
@@ -172,7 +164,6 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
             out = model(features, batch_mask)
-            out = model.softmax(out)
             loss = criterion(out, labels)
 
             loss.backward()
@@ -184,7 +175,6 @@ if __name__ == "__main__":
             for features, labels, batch_mask in eval_dataloader:
                 if features.shape[0] == 1:
                     labels = labels
-                    print("wait")
                 else:
                     labels = labels.squeeze()
                 out = model(features, batch_mask)
