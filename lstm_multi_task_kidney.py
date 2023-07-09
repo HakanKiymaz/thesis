@@ -1,4 +1,5 @@
 import os
+import json
 from collections import OrderedDict
 
 import numpy as np
@@ -241,12 +242,16 @@ if __name__ == "__main__":
 
     criterion = nn.CrossEntropyLoss()
     optimizer = AdamW(model.parameters(), lr=arguments.learning_rate, weight_decay=arguments.weight_decay)
+    accuracy = {"train_acc": [], "eval_acc": []}
     losses = {"train_loss": [], "eval_loss": []}
     for epoch in range(arguments.epochs):
+        true_count_for_acc = 0
+        total_count_for_acc = 0
         train_loss = []
         eval_loss = []
         model.train()
         for features, labels, mask in train_dataloader:
+            total_count_for_acc += task.task_count * len(features)
             optimizer.zero_grad()
 
             out = model(features, mask)
@@ -254,19 +259,35 @@ if __name__ == "__main__":
             bidirectional x batch x class_labels
             """
             loss = torch.Tensor([0.0])
-            for cls_id in range(arguments.train_batch_size):
+            for cls_id in range(len(labels)):
                 loss += criterion(out[cls_id], labels[cls_id])
+                true_count_for_acc += torch.sum(out[cls_id].argmax(dim=1) == labels[cls_id].argmax(dim=1)).item()
+            loss = loss / task.task_count
 
             loss.backward()
             optimizer.step()
             train_loss.append(loss.item())
         losses["train_loss"].append(np.mean(train_loss))
+        accuracy["train_acc"].append(true_count_for_acc / total_count_for_acc)
+
         model.eval()
         with torch.no_grad():
             for features, labels, mask_ in eval_dataloader:
                 out = model(features, mask_)
                 loss = torch.Tensor([0.0])
-                for cls_id in range(arguments.test_batch_size):
+                for cls_id in range(len(labels)):
                     loss += criterion(out[cls_id], labels[cls_id])
+                    true_count_for_acc += torch.sum(out[cls_id].argmax(dim=1) == labels[cls_id].argmax(dim=1)).item()
+
+                loss = loss / task.task_count
                 eval_loss.append(loss.item())
         losses["eval_loss"].append(np.mean(eval_loss))
+        accuracy["eval_acc"].append(true_count_for_acc / total_count_for_acc)
+
+    print()
+    with open("acc.json", "w") as f:
+        f.write(json.dumps(accuracy, indent=4))
+    with open("loss.json", "w") as f:
+        f.write(json.dumps(losses, indent=4))
+    print("accuracy:\n", accuracy, "\n")
+    print("losses:\n", losses, "\n")

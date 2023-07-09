@@ -4,7 +4,7 @@ args = {
         "emb_dim": 200,
         "hid_dim": 128,
         "bidirectional": True,
-        "epochs": 10,
+        "epochs": 20,
         "learning_rate": 1e-4,
         "weight_decay": 1e-3,
         "train_batch_size": 4,
