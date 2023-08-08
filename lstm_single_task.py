@@ -12,7 +12,6 @@ from lstm_parameters import Args, args
 from helpers import create_kidney_label, preprocess
 
 arguments = Args(args, type="kidney")
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
@@ -45,7 +44,10 @@ class SingleTaskLSTM(nn.Module):
             h0, c0))  # lstm takes input features matrix and (hidden,cell) state vectors
         # mask filtered embeddings are fed into lstm
 
-        output = self.drop(lstm_out)
+        cell = cell.permute((1, 0, 2))
+        cell = torch.flatten(cell, 1)
+
+        output = self.drop(cell)
         output = self.activation(output)
         output = self.last_token_vector(output, batch_mask)
         output = self.fc1(output)  # fully connected projection layer for class logits
@@ -53,10 +55,10 @@ class SingleTaskLSTM(nn.Module):
         return output
 
     def init_hidden(self, batch_size):
-        return torch.zeros(self.D, batch_size, self.hidden_dim, requires_grad=False)
+        return torch.zeros(self.D, batch_size, self.hidden_dim, requires_grad=False, device='cuda:0')
 
     def init_cell(self, batch_size):
-        return torch.zeros(self.D, batch_size, self.hidden_dim, requires_grad=False)
+        return torch.zeros(self.D, batch_size, self.hidden_dim, requires_grad=False, device='cuda:0')
 
     @staticmethod
     def last_token_vector(output_, mask_):
@@ -87,11 +89,6 @@ class PathologyDataset(Dataset):
                           "left": torch.Tensor([0, 1])}
         self.labels = [self.label_map[lbl] for lbl in self.labels_]
         self.labels = torch.stack(self.labels)
-
-        # send to device to use GPU
-        self.input_ids.to(device)
-        self.attention_mask.to(device)
-        self.labels.to(device)
 
     def __getitem__(self, idx):
         # this method will be called when we iterate dataset in the for loop.
@@ -157,6 +154,9 @@ if __name__ == "__main__":
         # os.mkdir(checkpoint_path + f"/{str(epoch)}")
         model.train()
         for features, labels, batch_mask in train_dataloader:
+            features = features.to(device)
+            labels = labels.to(device)
+            batch_mask = batch_mask.to(device)
             if features.shape[0] == 1:
                 labels = labels
             else:
@@ -173,6 +173,9 @@ if __name__ == "__main__":
         model.eval()
         with torch.no_grad():
             for features, labels, batch_mask in eval_dataloader:
+                features = features.to(device)
+                labels = labels.to(device)
+                batch_mask = batch_mask.to(device)
                 if features.shape[0] == 1:
                     labels = labels
                 else:
